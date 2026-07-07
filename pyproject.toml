@@ -1,0 +1,20 @@
+[project]
+name = "skillmap"
+version = "0.1.0"
+description = "Graph-scoped retrieval for Claude skills — surface only the relevant neighborhood of skills per work context."
+readme = "README.md"
+requires-python = ">=3.10"
+# skillmap itself is stdlib-only. The graph layer is graphify, invoked in its
+# own interpreter as a subprocess, so it is an external runtime dep, not a
+# Python-package dep here. Install it with: uv tool install graphifyy
+dependencies = []
+
+[project.scripts]
+skillmap = "skillmap.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["skillmap"]

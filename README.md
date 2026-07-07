@@ -53,5 +53,16 @@ are what determine whether the system holds up as it grows.
 
 ## Status
 
-Greenfield. Design is settled (above); implementation — likely an MCP server or
-a router skill layered over a graphify-built skill graph — is not yet started.
+Working proof-of-concept. A `skillmap` CLI discovers installed skills, extracts
+a skill/concept graph, hands it to **graphify** for graph building + clustering,
+and scopes the relevant skill neighborhood for a given work context. See
+[`DESIGN.md`](DESIGN.md) for architecture and usage.
+
+```bash
+./bin/skillmap build                    # discover → graph.json + graph.html
+./bin/skillmap scope "<work context>"   # relevant skill neighborhood
+```
+
+Still to build from the design above: the always-on hint / router layer (point
+3), the dedup/consolidation pass (point 4), and LLM-based concept extraction
+(the current pass mines concepts by weighted frequency, not semantics).
