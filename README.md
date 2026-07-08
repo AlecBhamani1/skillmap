@@ -69,15 +69,36 @@ The loop is closed for **self-improvement at the project level**: an agent
 that learns a durable, project-specific procedure saves it with
 
 ```bash
-./bin/skillmap add-skill <name> --description "<when to use it>" --body-file notes.md
+./bin/skillmap learn <name> --description "<when to use it>" --body-file notes.md
 ```
 
-which writes a lean `SKILL.md` into the project and updates the graph
+(`add-skill` is the same command; `learn` is the agent-facing name). This
+writes a lean `SKILL.md` into the project and updates the graph
 **incrementally** (no graphify call, no full rebuild), so the next
 `skillmap scope` in a future session recalls it. `skillmap hint --install`
-plants the tiny always-on hint (point 3 above) in the project's `CLAUDE.md`.
+plants the tiny always-on hint (point 3 above) — including *when* to bank a
+skill (a non-obvious, repeatable, project-specific procedure, not a one-off
+fact) — into the project's `CLAUDE.md`.
 
-Still to build from the design above: the full dedup/consolidation pass (point
-4 — refresh already drops deleted skills and blocks blind appends, but doesn't
-detect near-duplicates), and LLM-based concept extraction (the current pass
-mines concepts by weighted frequency, not semantics).
+Before writing, `learn`/`add-skill` scores the new description against every
+currently-installed skill (a fresh, in-memory graph — no graphify call). A
+strong match — by score and by shared, non-generic concepts, not just an
+exact name collision — is reported as "similar existing skill: `<name>`
+(`<path>`) — merge into it, or re-run with `--force`" and exits 3, the same
+contract as an exact-name collision: this is the point-4 dedup pass, scoped
+to the moment of creation rather than a sweep over already-existing skills.
+
+Frequency mining only ever finds words an author literally wrote, so an
+optional **semantic enrichment** pass layers synonym/abstraction concepts and
+concept↔concept bridges onto the same graph — that's what lets
+`scope "work with spreadsheets"` find a skill that only ever says "xlsx".
+Two routes produce the same payload: zero-key (`skillmap enrich-prompt` →
+have any capable agent answer it → `skillmap build --concepts-file
+answer.json`) or direct (`skillmap build --enrich`, using
+`ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` via stdlib `urllib`). Results
+cache per SKILL.md content hash, survive `learn`'s incremental refresh, and
+never break the key-free deterministic build.
+
+Still to build from the design above: a full dedup/consolidation sweep over
+*already-existing* skills (today's guard only catches near-duplicates at
+`learn` time).

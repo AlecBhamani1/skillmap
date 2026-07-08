@@ -25,6 +25,8 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
+from .extract import _normalize_name, split_redirections
+
 _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9-]+")
 
 _STOP = set(
@@ -93,6 +95,13 @@ class SkillGraph:
         for cid, node in self.nodes.items():
             if node.get("skillmap_kind") == "concept":
                 self._concept_df[cid] = len(self.adj.get(cid, []))
+        # Skill name lookup for redirection-span stripping at query time (the
+        # displayed skillmap_description stays verbatim, so this is recomputed
+        # here rather than baked into the node -- see split_redirections).
+        self._skills_by_norm: dict[str, str] = {
+            _normalize_name(n.get("label", "")): nid
+            for nid, n in self.nodes.items() if n.get("skillmap_kind") == "skill"
+        }
 
     @classmethod
     def load(cls, graph_path: Path) -> "SkillGraph":
@@ -109,13 +118,33 @@ class SkillGraph:
             kind = node.get("skillmap_kind")
             label_toks = set(_tokens(node.get("label", "")))
             if kind == "concept":
-                if label_toks & query_tokens:
+                overlap = label_toks & query_tokens
+                if len(label_toks) > 1:
+                    # Phrase concept (a bigram like "knowledge graph"): only
+                    # a full-phrase match counts, and it counts for a lot --
+                    # much stronger than two independent unrelated unigram
+                    # hits. A query that only echoes one of the two words
+                    # isn't "about" the phrase, so it seeds nothing here
+                    # (that word still seeds its own unigram concept, if one
+                    # was mined) -- this also keeps a coincidentally shared
+                    # single word from inflating matched-concept counts for
+                    # unrelated skills.
+                    if overlap == label_toks:
+                        seeds[nid] += 4.0 * len(label_toks) * self._idf(nid)
+                elif overlap:
                     seeds[nid] += 2.0 * self._idf(nid)
             elif kind == "skill":
-                # direct hits on skill name / description / triggers
+                # direct hits on skill name / description / triggers. The
+                # description is stripped of redirection spans naming another
+                # skill first -- skillmap_description itself stays verbatim
+                # for display, but a disclaimer like "use worker-cli instead
+                # for terminals" must not let "coordinator" match "terminals"
+                # here (see split_redirections).
+                clean_desc, _routed = split_redirections(
+                    node.get("skillmap_description", ""), nid, self._skills_by_norm)
                 hay = " ".join([
                     node.get("label", ""),
-                    node.get("skillmap_description", ""),
+                    clean_desc,
                     " ".join(node.get("skillmap_triggers", []) or []),
                 ])
                 overlap = query_tokens & set(_tokens(hay))
