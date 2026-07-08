@@ -98,7 +98,7 @@ add-skill: write SKILL.md ──► extract ──► merge into existing graph.
 5. **`enrich.py`** — the optional **semantic layer** on the same extraction. A payload of
    per-skill concepts + concept↔concept pairs (produced either by any host agent answering
    `skillmap enrich-prompt`, or by `build --enrich` calling the Anthropic Messages API via
-   stdlib `urllib` — model `claude-opus-4-8`, override with `SKILLMAP_ENRICH_MODEL`) is
+   stdlib `urllib` — model `claude-sonnet-5`, override with `SKILLMAP_ENRICH_MODEL`) is
    validated/clamped, then applied as enriched concept nodes (`skillmap_source:
    "enrichment"`), `references` edges, and `conceptually_related_to` edges — the synonym
    bridges that let `scope` resolve queries whose words appear in no `SKILL.md`. Validated

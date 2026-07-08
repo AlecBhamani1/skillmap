@@ -50,7 +50,7 @@ MAX_RELATED_PAIRS = 60
 
 API_URL = "https://api.anthropic.com/v1/messages"
 API_VERSION = "2023-06-01"
-DEFAULT_MODEL = "claude-opus-4-8"
+DEFAULT_MODEL = "claude-sonnet-5"
 MODEL_ENV = "SKILLMAP_ENRICH_MODEL"
 
 # Structured-outputs schema for the payload. Dynamic keys aren't allowed

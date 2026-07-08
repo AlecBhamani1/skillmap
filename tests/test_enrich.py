@@ -200,13 +200,14 @@ def test_request_requires_credentials(monkeypatch):
 def test_request_shape_with_api_key(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("SKILLMAP_ENRICH_MODEL", raising=False)
     req = build_request(_fixtures())
     assert req.full_url == "https://api.anthropic.com/v1/messages"
     assert req.get_header("X-api-key") == "sk-test"
     assert req.get_header("Anthropic-version") == "2023-06-01"
     body = json.loads(req.data.decode("utf-8"))
     assert body["output_config"]["format"]["schema"] == PAYLOAD_SCHEMA
-    assert body["model"]  # default or env override, never empty
+    assert body["model"] == "claude-sonnet-5"
 
 
 def test_request_shape_with_oauth_token(monkeypatch):
