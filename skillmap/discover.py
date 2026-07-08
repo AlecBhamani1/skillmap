@@ -13,13 +13,28 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# Default roots to scan for skills. ~/.claude/skills is where Claude Code loads
-# user skills from; ~/.agents/skills is the Orca canonical location that the
-# .claude symlinks point into.
+# Default GLOBAL roots to scan for skills. ~/.claude/skills is where Claude Code
+# loads user skills from; ~/.agents/skills is the Orca canonical location that
+# the .claude symlinks point into. Project-level skills live under
+# <project>/.claude/skills (see find_project_root / project_skills_root).
 DEFAULT_ROOTS = [
     Path.home() / ".claude" / "skills",
     Path.home() / ".agents" / "skills",
 ]
+
+
+def find_project_root(start: Path | None = None) -> Path | None:
+    """Nearest ancestor of `start` (default: cwd) containing .git, else None."""
+    cur = (start or Path.cwd()).resolve()
+    for cand in (cur, *cur.parents):
+        if (cand / ".git").exists():
+            return cand
+    return None
+
+
+def project_skills_root(project_root: Path) -> Path:
+    """Where project-level skills live: <project>/.claude/skills."""
+    return Path(project_root) / ".claude" / "skills"
 
 
 @dataclass
