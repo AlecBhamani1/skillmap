@@ -17,6 +17,9 @@ Run from a source checkout via the launcher (no install needed — it inserts th
 
 ```bash
 ./bin/skillmap build                           # discover → extract → build skillmap-out/graph.json + graph.html
+./bin/skillmap build --enrich                  # + semantic concepts via the Anthropic API (needs ANTHROPIC_API_KEY/_AUTH_TOKEN)
+./bin/skillmap build --concepts-file F         # + semantic concepts from an answered enrich-prompt (zero-key route)
+./bin/skillmap enrich-prompt                   # print the enrichment prompt for a host agent/LLM to answer
 ./bin/skillmap list                            # list discovered skills (no build)
 ./bin/skillmap add-skill NAME --description ".." [--body-file F] [--reference F]
                                                 # author a project skill + refresh graph.json in place
@@ -92,7 +95,19 @@ add-skill: write SKILL.md ──► extract ──► merge into existing graph.
    `.skillmap_extract.json` when no `graph.json` exists yet — so `scope` works even without
    graphify installed — and which the tests use to bypass graphify.
 
-5. **`author.py`** — the agent-facing **write path** behind `add-skill`/`learn`. Validates and
+5. **`enrich.py`** — the optional **semantic layer** on the same extraction. A payload of
+   per-skill concepts + concept↔concept pairs (produced either by any host agent answering
+   `skillmap enrich-prompt`, or by `build --enrich` calling the Anthropic Messages API via
+   stdlib `urllib` — model `claude-opus-4-8`, override with `SKILLMAP_ENRICH_MODEL`) is
+   validated/clamped, then applied as enriched concept nodes (`skillmap_source:
+   "enrichment"`), `references` edges, and `conceptually_related_to` edges — the synonym
+   bridges that let `scope` resolve queries whose words appear in no `SKILL.md`. Validated
+   payloads cache per SKILL.md content hash in `<out>/.skillmap_enrich.json`;
+   `refresh_graph` re-applies the cache so `add-skill` never loses enrichment, and a stale
+   entry (edited skill) silently falls back to deterministic mining. Enrichment failure
+   never fails a build — the deterministic graph is the floor.
+
+6. **`author.py`** — the agent-facing **write path** behind `add-skill`/`learn`. Validates and
    writes a project-level `SKILL.md` (+ `references/`) under
    `<project>/.claude/skills/<name>/`, then re-runs the deterministic extraction over all roots
    and merges it into the existing `graph.json` **in place** — preserving graphify-computed
@@ -114,13 +129,14 @@ add-skill: write SKILL.md ──► extract ──► merge into existing graph.
 - **`author.py`'s incremental merge must keep preserving graphify-computed node attributes**
   (e.g. `community`) across a refresh — that's what lets `add-skill` update `graph.json`
   without ever invoking graphify. Don't regress it into a full node replace.
-- **Concept mining is frequency-based, not semantic** — a known limitation. The extraction
-  schema is already graphify-native, so an LLM concept pass (Gemini key / host-agent
-  subagents) is a drop-in upgrade, not a rewrite.
+- **Deterministic mining is the floor; enrichment is an overlay.** `enrich.py`'s semantic
+  pass must stay optional and non-fatal: no credentials/cache → the key-free deterministic
+  build still works end to end, and `apply_cached` never raises. Keep the direct-API call on
+  stdlib `urllib` (no `anthropic` PyPI dep — same rule as graphify-as-subprocess).
 - The graphify interpreter-discovery in `graph.py` deliberately **mirrors the graphify
   skill's own Step 1 detection** — keep them in sync if graphify's install story changes.
 
 Not yet built (see `DESIGN.md` "next steps"): graphing bundled skills that have no on-disk
-`SKILL.md`, LLM/semantic concept extraction (mining is still frequency-based), and a full
-dedup/consolidation pass (near-duplicate detection beyond the incremental refresh's
-drop-deleted-skills / block-blind-append behavior).
+`SKILL.md`, and a full dedup/consolidation pass over already-existing skills (near-duplicate
+detection beyond `add-skill`'s pre-write guard and the incremental refresh's
+drop-deleted-skills behavior).

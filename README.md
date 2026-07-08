@@ -88,7 +88,17 @@ exact name collision — is reported as "similar existing skill: `<name>`
 contract as an exact-name collision: this is the point-4 dedup pass, scoped
 to the moment of creation rather than a sweep over already-existing skills.
 
+Frequency mining only ever finds words an author literally wrote, so an
+optional **semantic enrichment** pass layers synonym/abstraction concepts and
+concept↔concept bridges onto the same graph — that's what lets
+`scope "work with spreadsheets"` find a skill that only ever says "xlsx".
+Two routes produce the same payload: zero-key (`skillmap enrich-prompt` →
+have any capable agent answer it → `skillmap build --concepts-file
+answer.json`) or direct (`skillmap build --enrich`, using
+`ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` via stdlib `urllib`). Results
+cache per SKILL.md content hash, survive `learn`'s incremental refresh, and
+never break the key-free deterministic build.
+
 Still to build from the design above: a full dedup/consolidation sweep over
 *already-existing* skills (today's guard only catches near-duplicates at
-`learn` time), and LLM-based concept extraction (the current pass mines
-concepts by weighted frequency, not semantics).
+`learn` time).

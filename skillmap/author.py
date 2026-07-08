@@ -25,6 +25,7 @@ from collections import Counter
 from pathlib import Path
 
 from .discover import discover
+from .enrich import apply_cached
 from .extract import build_extraction
 from .scope import ScopedSkill, SkillGraph
 
@@ -271,6 +272,11 @@ def refresh_graph(roots: list[Path], out_dir: Path,
     skills = discover(roots)
     extraction = build_extraction(skills, max_concepts_per_skill=max_concepts_per_skill)
     out_dir = Path(out_dir)
+    # Re-apply cached semantic enrichment before merging: the merge below
+    # replaces nodes/edges with this extraction, so enrichment lives (or dies)
+    # at the extraction layer. Unchanged skills keep their enriched concepts
+    # with no network call; an edited skill's stale entry is skipped.
+    apply_cached(extraction, skills, out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / ".skillmap_extract.json").write_text(
         json.dumps(extraction, ensure_ascii=False), encoding="utf-8")

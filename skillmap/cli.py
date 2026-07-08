@@ -2,9 +2,19 @@
 
 Commands:
   skillmap build [--root DIR ...] [--out DIR] [--max-concepts N]
+                 [--enrich] [--concepts-file PATH]
       Discover installed skills (global + this project), extract a
       skill/concept graph, and hand it to graphify to build graph.json
-      (+ community clustering).
+      (+ community clustering). --enrich layers semantic concepts on top via
+      the Anthropic API (stdlib urllib; needs ANTHROPIC_API_KEY or
+      ANTHROPIC_AUTH_TOKEN); --concepts-file applies a payload produced by
+      answering `skillmap enrich-prompt` (the zero-key route). Both cache per
+      SKILL.md content hash in <out>/.skillmap_enrich.json, and add-skill's
+      incremental refresh re-applies that cache automatically.
+
+  skillmap enrich-prompt [--root DIR ...]
+      Print the semantic-enrichment prompt for a host agent/LLM to answer
+      (feed the JSON answer back with `build --concepts-file`).
 
   skillmap list [--root DIR ...]
       List discovered skills without building.
@@ -52,6 +62,9 @@ from pathlib import Path
 from . import __version__
 from .author import NearDuplicateSkillError, SkillExistsError, refresh_graph, write_skill
 from .discover import DEFAULT_ROOTS, discover, find_project_root, project_skills_root
+from .enrich import (EnrichmentError, EnrichmentUnavailable, apply_cached,
+                     build_enrich_prompt, load_cache, merge_into_cache,
+                     request_enrichment, save_cache, validate_payload)
 from .extract import build_extraction
 from .graph import build_graph, find_graphify_python, graphify_query
 from .scope import SkillGraph
@@ -126,6 +139,66 @@ def cmd_list(args) -> int:
     return 0
 
 
+def _run_enrichment(args, skills, extraction, out: Path) -> int:
+    """The optional semantic layer on top of the deterministic extraction.
+
+    Order: a --concepts-file payload and/or a --enrich API pass merge into the
+    per-content-hash cache first, then the (whole) cache is applied. Only bad
+    *input* fails the build (exit 1: unreadable/invalid --concepts-file, or
+    --enrich with no credentials); a mid-run API failure warns and continues —
+    the deterministic graph must always build.
+    """
+    if getattr(args, "concepts_file", None):
+        cf = Path(args.concepts_file)
+        try:
+            payload = json.loads(cf.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"--concepts-file unreadable or not JSON: {e}", file=sys.stderr)
+            return 1
+        normalized, warnings = validate_payload(payload, skills)
+        for w in warnings:
+            print(f"  enrich: {w}", file=sys.stderr)
+        save_cache(out, merge_into_cache(load_cache(out), normalized, skills))
+
+    if getattr(args, "enrich", False):
+        print("→ Enriching concepts via the Anthropic API…")
+        try:
+            payload = request_enrichment(skills)
+        except EnrichmentUnavailable as e:
+            print(f"  ERROR: {e}", file=sys.stderr)
+            return 1
+        except EnrichmentError as e:
+            print(f"  WARNING: enrichment failed, continuing without it: {e}",
+                  file=sys.stderr)
+        else:
+            normalized, warnings = validate_payload(payload, skills)
+            for w in warnings:
+                print(f"  enrich: {w}", file=sys.stderr)
+            save_cache(out, merge_into_cache(load_cache(out), normalized, skills))
+
+    summary = apply_cached(extraction, skills, out)
+    for w in summary.get("warnings", []):
+        print(f"  enrich: {w}", file=sys.stderr)
+    if summary["added_nodes"] or summary["added_edges"]:
+        print(f"  semantic enrichment: +{summary['added_nodes']} concept nodes "
+              f"· +{summary['added_edges']} edges")
+    return 0
+
+
+def cmd_enrich_prompt(args) -> int:
+    roots = _roots(args)
+    if getattr(args, "project_only", False) and not roots:
+        print("No project root found (no .git upward from cwd). Pass --project-dir.",
+              file=sys.stderr)
+        return 1
+    skills = discover(roots)
+    if not skills:
+        print("No skills found — nothing to enrich.", file=sys.stderr)
+        return 1
+    print(build_enrich_prompt(skills))
+    return 0
+
+
 def cmd_build(args) -> int:
     out = _out(args)
     roots = _roots(args)
@@ -145,6 +218,10 @@ def cmd_build(args) -> int:
     n_skill = sum(1 for n in extraction["nodes"] if n.get("skillmap_kind") == "skill")
     n_concept = sum(1 for n in extraction["nodes"] if n.get("skillmap_kind") == "concept")
     print(f"  {n_skill} skill nodes · {n_concept} concept nodes · {len(extraction['edges'])} edges")
+
+    rc = _run_enrichment(args, skills, extraction, out)
+    if rc:
+        return rc
 
     print("→ Locating graphify engine…")
     gpy = find_graphify_python()
@@ -361,6 +438,13 @@ def build_parser() -> argparse.ArgumentParser:
     add_common(b, SCAN_ONLY)
     add_out(b)
     b.add_argument("--max-concepts", type=int, default=12, help="concepts per skill")
+    b.add_argument("--enrich", action="store_true",
+                   help="add semantic concepts via the Anthropic API "
+                        "(needs ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN; "
+                        "results cache in <out>/.skillmap_enrich.json)")
+    b.add_argument("--concepts-file", metavar="PATH",
+                   help="apply a semantic-concepts payload produced by answering "
+                        "`skillmap enrich-prompt` (the zero-key enrichment route)")
     b.set_defaults(func=cmd_build)
 
     ls = sub.add_parser("list", help="list discovered skills")
@@ -396,6 +480,16 @@ def build_parser() -> argparse.ArgumentParser:
     ad.add_argument("--json", action="store_true")
     add_common(ad, SCAN_ONLY + " when refreshing the graph")
     ad.set_defaults(func=cmd_add_skill)
+
+    ep = sub.add_parser(
+        "enrich-prompt",
+        help="print the semantic-enrichment prompt for a host agent to answer",
+        description="Zero-key enrichment route: print a prompt describing every "
+                    "installed skill. Have any capable agent/LLM answer it, save "
+                    "the JSON answer, then run "
+                    "`skillmap build --concepts-file <answer.json>`.")
+    add_common(ep, SCAN_ONLY)
+    ep.set_defaults(func=cmd_enrich_prompt)
 
     h = sub.add_parser("hint", help="print/install the always-on 'query the graph' hint")
     h.add_argument("--install", action="store_true",

@@ -69,6 +69,19 @@ CURATED_PROBES = [
      "expect": "orchestration"},
 ]
 
+# Synonym-bridging probes: deliberately phrased so the key words appear in no
+# SKILL.md — they can only resolve through the semantic-enrichment layer
+# (enriched concept nodes + conceptually_related_to edges). Scored only when
+# the loaded graph actually contains enrichment; reported as skipped otherwise.
+BRIDGE_PROBES = [
+    {"context": "drive a GUI program with simulated mouse and keyboard input",
+     "expect": "computer-use"},
+    {"context": "visualize how the pieces of this project fit together",
+     "expect": "graphify"},
+    {"context": "delegate chunks of work to helpers and supervise their progress",
+     "expect": "orchestration"},
+]
+
 REQUIRED_EDGE_KEYS = {"source", "target", "relation", "confidence", "confidence_score"}
 ALLOWED_RELATIONS = {"references", "semantically_similar_to", "conceptually_related_to"}
 
@@ -166,6 +179,23 @@ def run(graph_arg: str | None = None) -> dict:
             "adversarial": probe.get("adversarial", False),
             "rank": rank, "surfaced": names})
 
+    # ---- 4. BRIDGE (requires enrichment) --------------------------------
+    enriched = any(n.get("skillmap_source") == "enrichment"
+                   for n in graph.nodes.values())
+    report["enriched"] = enriched
+    report["bridge"] = []
+    if enriched:
+        for probe in BRIDGE_PROBES:
+            if probe["expect"] not in installed:
+                continue
+            results = graph.scope(probe["context"])
+            names = [r.name for r in results]
+            rank = names.index(probe["expect"]) + 1 if probe["expect"] in names else None
+            surfaced_counts.append(len(names))
+            report["bridge"].append({
+                "context": probe["context"], "expect": probe["expect"],
+                "rank": rank, "surfaced": names})
+
     # ---- metrics -------------------------------------------------------
     def _accuracy(rows):
         scored = [r for r in rows if r["rank"] is not None or True]
@@ -179,6 +209,7 @@ def run(graph_arg: str | None = None) -> dict:
     cu_top1, cu_mrr = _accuracy(report["curated"])
     adv_rows = [r for r in report["curated"] if r["adversarial"]]
     adv_top1, _ = _accuracy(adv_rows) if adv_rows else (None, None)
+    br_top1, _ = _accuracy(report["bridge"]) if report["bridge"] else (None, None)
     compression = (sum(surfaced_counts) / len(surfaced_counts) / n_installed
                    if surfaced_counts else None)
 
@@ -187,14 +218,18 @@ def run(graph_arg: str | None = None) -> dict:
         "identity_top1": id_top1, "identity_mrr": id_mrr,
         "curated_top1": cu_top1, "curated_mrr": cu_mrr,
         "adversarial_top1": adv_top1,
+        "bridge_top1": br_top1,
         "mean_compression": round(compression, 3) if compression else None,
     }
     health_ok = all(h["pass"] for h in report["health"])
     # Viability bar: pipeline healthy, identity perfect (it's the easy tier),
     # curated at least 80% — adversarial misses are reported but only fail the
-    # bar when they drag curated below that line.
+    # bar when they drag curated below that line. Bridge probes gate only when
+    # the graph is enriched (they're unreachable by design without it).
+    bridge_ok = br_top1 is None or br_top1 >= 2 / 3
     report["pass"] = bool(
-        health_ok and (id_top1 or 0) == 1.0 and (cu_top1 if cu_top1 is not None else 1.0) >= 0.8)
+        health_ok and (id_top1 or 0) == 1.0
+        and (cu_top1 if cu_top1 is not None else 1.0) >= 0.8 and bridge_ok)
     return report
 
 
@@ -224,12 +259,22 @@ def main(argv: list[str] | None = None) -> int:
         adv = " [adversarial]" if r["adversarial"] else ""
         print(f"  {mark}  expect={r['expect']:<14} rank={r['rank']}{adv}")
         print(f"        \"{r['context']}\"  → {r['surfaced']}")
+    if report["enriched"]:
+        print("\n[bridge probes]  (words in no SKILL.md → enrichment routes them?)")
+        for r in report["bridge"]:
+            mark = "PASS" if r["rank"] == 1 else "FAIL"
+            print(f"  {mark}  expect={r['expect']:<14} rank={r['rank']}")
+            print(f"        \"{r['context']}\"  → {r['surfaced']}")
+    else:
+        print("\n[bridge probes]  skipped — graph has no semantic enrichment "
+              "(run `skillmap build --enrich` or the enrich-prompt route)")
     m = report["metrics"]
     print("\n[metrics]")
     print(f"  installed skills     : {m['installed_skills']}")
     print(f"  identity top-1 / MRR : {m['identity_top1']} / {m['identity_mrr']}")
     print(f"  curated  top-1 / MRR : {m['curated_top1']} / {m['curated_mrr']}")
     print(f"  adversarial top-1    : {m['adversarial_top1']}")
+    print(f"  bridge top-1         : {m['bridge_top1']}  (None = no enrichment in graph)")
     print(f"  mean compression     : {m['mean_compression']}  (fraction of installed skills surfaced per query; lower = fewer distractors)")
     print(f"\n{'VIABLE' if report['pass'] else 'DEGRADED'} — exit {0 if report['pass'] else 1}")
     return 0 if report["pass"] else 1
