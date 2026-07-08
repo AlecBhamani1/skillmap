@@ -69,15 +69,26 @@ The loop is closed for **self-improvement at the project level**: an agent
 that learns a durable, project-specific procedure saves it with
 
 ```bash
-./bin/skillmap add-skill <name> --description "<when to use it>" --body-file notes.md
+./bin/skillmap learn <name> --description "<when to use it>" --body-file notes.md
 ```
 
-which writes a lean `SKILL.md` into the project and updates the graph
+(`add-skill` is the same command; `learn` is the agent-facing name). This
+writes a lean `SKILL.md` into the project and updates the graph
 **incrementally** (no graphify call, no full rebuild), so the next
 `skillmap scope` in a future session recalls it. `skillmap hint --install`
-plants the tiny always-on hint (point 3 above) in the project's `CLAUDE.md`.
+plants the tiny always-on hint (point 3 above) — including *when* to bank a
+skill (a non-obvious, repeatable, project-specific procedure, not a one-off
+fact) — into the project's `CLAUDE.md`.
 
-Still to build from the design above: the full dedup/consolidation pass (point
-4 — refresh already drops deleted skills and blocks blind appends, but doesn't
-detect near-duplicates), and LLM-based concept extraction (the current pass
-mines concepts by weighted frequency, not semantics).
+Before writing, `learn`/`add-skill` scores the new description against every
+currently-installed skill (a fresh, in-memory graph — no graphify call). A
+strong match — by score and by shared, non-generic concepts, not just an
+exact name collision — is reported as "similar existing skill: `<name>`
+(`<path>`) — merge into it, or re-run with `--force`" and exits 3, the same
+contract as an exact-name collision: this is the point-4 dedup pass, scoped
+to the moment of creation rather than a sweep over already-existing skills.
+
+Still to build from the design above: a full dedup/consolidation sweep over
+*already-existing* skills (today's guard only catches near-duplicates at
+`learn` time), and LLM-based concept extraction (the current pass mines
+concepts by weighted frequency, not semantics).

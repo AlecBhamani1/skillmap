@@ -26,6 +26,7 @@ from pathlib import Path
 
 from .discover import discover
 from .extract import build_extraction
+from .scope import ScopedSkill, SkillGraph
 
 # Keep SKILL.md lean (README ~500-line guideline, with headroom for frontmatter).
 MAX_BODY_LINES = 450
@@ -33,6 +34,18 @@ MAX_BODY_LINES = 450
 MIN_DESCRIPTION_LEN = 20
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
+
+# Near-duplicate guard thresholds (author.py's near-duplicate check, below).
+# Calibrated against tests/test_learn_loop.py's fixture skills: a genuine
+# re-description of an existing procedure under a new name (e.g. "ship app to
+# prod with canary" vs. an existing "deploy app to prod with canary/rollback"
+# skill) clears both bars comfortably (score ~16, overlap 5); a related but
+# distinct skill (e.g. a *staging* deploy vs. a *production* deploy skill)
+# clears at most one (score ~8, overlap 2) and must not be blocked. Requiring
+# both -- not just a high score -- rules out a false positive from one very
+# rare/high-IDF word coincidentally shared by two unrelated skills.
+NEAR_DUPLICATE_MIN_SCORE = 6.0
+NEAR_DUPLICATE_MIN_OVERLAP = 3
 
 
 class SkillExistsError(Exception):
@@ -46,6 +59,49 @@ class SkillExistsError(Exception):
             "refactor your new material into it (push detail into references/), "
             "then rerun with --force to write the merged version."
         )
+
+
+class NearDuplicateSkillError(Exception):
+    """Raised when an existing (differently-named) skill strongly overlaps the
+    new one -- the failure mode SkillExistsError doesn't catch: an agent that
+    re-derives a procedure already banked under another name, silently filling
+    the graph with near-duplicate skill nodes instead of one better one.
+    """
+
+    def __init__(self, match: ScopedSkill):
+        self.match = match
+        super().__init__(
+            f"similar existing skill: {match.name} ({match.path}) — "
+            "merge into it, or re-run with --force"
+        )
+
+
+def find_near_duplicate(roots: list[Path], name: str, description: str,
+                        max_concepts_per_skill: int = 12) -> ScopedSkill | None:
+    """Return the closest currently-installed skill if it looks like the same
+    procedure as (name, description) under a different name, else None.
+
+    Builds a fresh extraction + SkillGraph over `roots` (no graphify, no
+    on-disk graph.json needed) and scopes the candidate's own name tokens +
+    description against it, exactly as `skillmap scope` would once the skill
+    existed. A match only counts as a duplicate when it clears both
+    NEAR_DUPLICATE_MIN_SCORE and NEAR_DUPLICATE_MIN_OVERLAP -- see the
+    constants' docstring for why both are required.
+    """
+    skills = discover(roots)
+    if not skills:
+        return None
+    extraction = build_extraction(skills, max_concepts_per_skill=max_concepts_per_skill)
+    graph = SkillGraph(extraction)
+    query = f"{name.replace('-', ' ')} {description}"
+    results = graph.scope(query, top_k=1, min_ratio=0.0)
+    if not results:
+        return None
+    top = results[0]
+    overlap = [c for c in top.matched_concepts if not c.startswith("→")]
+    if top.score >= NEAR_DUPLICATE_MIN_SCORE and len(overlap) >= NEAR_DUPLICATE_MIN_OVERLAP:
+        return top
+    return None
 
 
 def validate_name(name: str) -> str | None:
@@ -93,12 +149,17 @@ def render_skill_md(name: str, description: str, body: str,
 
 def write_skill(skills_root: Path, name: str, description: str, body: str = "",
                 reference_files: list[Path] | None = None,
-                force: bool = False) -> Path:
+                force: bool = False,
+                dedup_roots: list[Path] | None = None,
+                max_concepts_per_skill: int = 12) -> Path:
     """Create <skills_root>/<name>/SKILL.md (+ references/). Returns the SKILL.md path.
 
-    Raises ValueError on invalid name/description/oversized body and
-    SkillExistsError if the skill exists and force is False. --force overwrites
-    SKILL.md but never deletes existing references/.
+    Raises ValueError on invalid name/description/oversized body,
+    SkillExistsError if the skill exists (exact-name collision), and
+    NearDuplicateSkillError if `dedup_roots` is given and an existing
+    (differently-named) skill's description strongly overlaps this one --
+    see find_near_duplicate(). --force bypasses *both* checks and overwrites
+    SKILL.md, but never deletes existing references/.
     """
     for err in (validate_name(name), validate_description(description)):
         if err:
@@ -120,6 +181,11 @@ def write_skill(skills_root: Path, name: str, description: str, body: str = "",
     skill_md = skill_dir / "SKILL.md"
     if skill_md.exists() and not force:
         raise SkillExistsError(skill_md)
+    if dedup_roots and not force:
+        dup = find_near_duplicate(dedup_roots, name, description,
+                                  max_concepts_per_skill=max_concepts_per_skill)
+        if dup:
+            raise NearDuplicateSkillError(dup)
 
     ref_names: list[str] = []
     if reference_files:

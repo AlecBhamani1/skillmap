@@ -10,8 +10,13 @@ Commands:
       List discovered skills without building.
 
   skillmap add-skill NAME --description "..." [--body-file F] [--reference F ...]
+  skillmap learn NAME --description "..." [--body-file F] [--reference F ...]
       Author a project-level skill (<project>/.claude/skills/NAME/SKILL.md)
       and refresh the graph incrementally so `scope` recalls it immediately.
+      `learn` is the same command under the agent-facing name. Before writing,
+      checks the new description against every installed skill; a strong
+      overlap with an existing (differently-named) skill is treated like a
+      name collision (exit 3: merge into it, or pass --force).
 
   skillmap scope "<work context>" [--out DIR] [--top-k N] [--json]
       Return only the relevant neighborhood of skills for a work context.
@@ -33,7 +38,8 @@ filters the output to project-level skills; on discovery commands it restricts
 scanning to the project's .claude/skills.
 
 Exit codes: 0 success · 1 invalid input / nothing found · 2 graphify missing
-· 3 skill already exists (merge, then --force).
+· 3 skill already exists, by name or by near-duplicate description (merge,
+then --force).
 """
 
 from __future__ import annotations
@@ -44,7 +50,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from .author import SkillExistsError, refresh_graph, write_skill
+from .author import NearDuplicateSkillError, SkillExistsError, refresh_graph, write_skill
 from .discover import DEFAULT_ROOTS, discover, find_project_root, project_skills_root
 from .extract import build_extraction
 from .graph import build_graph, find_graphify_python, graphify_query
@@ -202,10 +208,16 @@ HINT = f"""{HINT_MARKER}
 ## Skills (skillmap)
 This project keeps a skill graph. Before non-trivial work, surface what applies:
 `skillmap scope "<what you're about to do>"` — then read the surfaced SKILL.md.
-When you learn a durable, project-specific procedure, save it so future
-sessions recall it: `skillmap add-skill <name> --description "<when to use it>"
---body-file <notes.md>`. Merge into an existing skill instead of creating
-near-duplicates.
+
+Bank a skill when — not just after solving a bug or answering a one-off
+question — you figure out a **non-obvious, repeatable, project-specific**
+procedure: a build quirk, a deploy step, the exact test invocation, where some
+data or config actually lives, a gotcha that cost you real trial and error.
+If the next session would otherwise have to re-derive it from scratch, save
+it: `skillmap learn <name> --description "<when to use it>" --body-file
+<notes.md>` (alias: `add-skill`). If a similar skill already exists, `learn`
+exits 3 and names it — merge into that skill instead of creating a
+near-duplicate, or pass --force once merged.
 <!-- /skillmap:hint -->"""
 
 
@@ -233,8 +245,10 @@ def cmd_add_skill(args) -> int:
             skills_root, args.name, args.description, body,
             reference_files=[Path(r) for r in args.reference or []],
             force=args.force,
+            dedup_roots=_roots(args),
+            max_concepts_per_skill=args.max_concepts,
         )
-    except SkillExistsError as e:
+    except (SkillExistsError, NearDuplicateSkillError) as e:
         print(str(e), file=sys.stderr)
         return 3
     except ValueError as e:
@@ -355,10 +369,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     ad = sub.add_parser(
         "add-skill", aliases=["learn"],
-        help="author a project-level skill and make it recallable via scope",
+        help="author a project-level skill and make it recallable via scope "
+             "(agent-facing alias: `learn`)",
         description="Write <project>/.claude/skills/NAME/SKILL.md and refresh the "
                     "graph incrementally so `skillmap scope` surfaces it immediately. "
-                    "Exit 3 means the skill exists: merge into it, then use --force.")
+                    "`learn` is the same command. Exit 3 means the skill already "
+                    "exists -- by exact name, or because an existing skill's "
+                    "description strongly overlaps this one: merge into it, then "
+                    "use --force.")
     ad.add_argument("name", help="skill name (lowercase kebab-case, e.g. deploy-staging)")
     ad.add_argument("--description", required=True,
                     help="what the skill does and when to use it — the field the "
