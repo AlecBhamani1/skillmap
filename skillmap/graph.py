@@ -29,15 +29,24 @@ def find_graphify_python() -> str | None:
             first = Path(binpath).read_text(errors="replace").splitlines()[0]
         except OSError:
             first = ""
-        if first.startswith("#!"):
-            interp = first[2:].strip()
-            if _can_import_graphify(interp):
+        argv_prefix = _parse_shebang(first)
+        if argv_prefix and _can_import_graphify(argv_prefix):
+            # Env-style shebangs ("#!/usr/bin/env python3") launch through
+            # `env`; the real interpreter is the first non-flag token after
+            # it (skipping things like "-S"). Direct shebangs are just the
+            # one path. Either way we hand back a plain interpreter string —
+            # the same shape the uv/python3 fallbacks below return.
+            if Path(argv_prefix[0]).name == "env":
+                interp = next((t for t in argv_prefix[1:] if not t.startswith("-")), None)
+            else:
+                interp = argv_prefix[0]
+            if interp:
                 return interp
     # 2. uv tool run
     if shutil.which("uv"):
         try:
             out = subprocess.run(
-                ["uv", "tool", "run", "graphifyy", "python", "-c",
+                ["uv", "tool", "run", "--from", "graphifyy", "python", "-c",
                  "import sys; print(sys.executable)"],
                 capture_output=True, text=True, timeout=60,
             )
@@ -52,10 +61,32 @@ def find_graphify_python() -> str | None:
     return None
 
 
-def _can_import_graphify(interp: str) -> bool:
+def _parse_shebang(line: str) -> list[str] | None:
+    """Tokenize a shebang line into an argv prefix, or None if it isn't one.
+
+    A direct interpreter shebang ("#!/opt/foo/bin/python3") becomes a single
+    token. An env-style shebang ("#!/usr/bin/env python3", optionally with
+    flags such as "-S") keeps every token — the whole line is a valid argv
+    prefix (["/usr/bin/env", "python3"]), whereas treating the remainder as
+    one string would put "/usr/bin/env python3" in a single argv[0] slot and
+    fail with FileNotFoundError.
+    """
+    if not line.startswith("#!"):
+        return None
+    tokens = line[2:].split()
+    return tokens or None
+
+
+def _can_import_graphify(interp: str | list[str]) -> bool:
+    """Probe whether `interp` can `import graphify`.
+
+    `interp` is either a single executable (path or name on PATH) or a full
+    argv prefix (e.g. ["/usr/bin/env", "python3"]) for env-style shebangs.
+    """
+    argv_prefix = interp if isinstance(interp, list) else [interp]
     try:
         r = subprocess.run(
-            [interp, "-c", "import graphify"],
+            [*argv_prefix, "-c", "import graphify"],
             capture_output=True, timeout=60,
         )
         return r.returncode == 0

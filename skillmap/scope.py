@@ -36,9 +36,20 @@ _STOP = set(
 
 def _stem(tok: str) -> str:
     """Cheap suffix stem so plural/gerund query words match concept labels."""
-    for suf in ("ing", "ies", "es", "s"):
+    for suf in ("ing", "ies"):
         if tok.endswith(suf) and len(tok) - len(suf) >= 3:
             return tok[: -len(suf)] + ("y" if suf == "ies" else "")
+    if tok.endswith("es") and len(tok) - 2 >= 3:
+        stem_before = tok[:-2]
+        # Only a genuine -es plural (boxes->box, dishes->dish, kisses->kiss)
+        # when the stem already ends in a sibilant. Otherwise this is a word
+        # that just ends in a plain "e" (release->releases, file->files) and
+        # stripping "es" would truncate past the singular; fall through to
+        # stripping the bare "s" instead.
+        if stem_before.endswith(("ss", "x", "z", "ch", "sh")):
+            return stem_before
+    if tok.endswith("s") and len(tok) - 1 >= 3:
+        return tok[:-1]
     return tok
 
 
@@ -114,12 +125,17 @@ class SkillGraph:
 
     def scope(self, work_context: str, top_k: int = 8,
               hops: int = 2, decay: float = 0.5,
-              min_ratio: float = 0.1) -> list[ScopedSkill]:
+              min_ratio: float = 0.1, origin: str | None = None) -> list[ScopedSkill]:
         """Return the ranked neighborhood of skills relevant to work_context.
 
         min_ratio drops skills scoring below that fraction of the top score, so
         the result is a scoped *neighborhood* rather than a ranked list of every
         installed skill. Set to 0 to keep the full gradient.
+
+        origin, if given (e.g. "project"), restricts the candidate skill set to
+        that origin *before* min_ratio/top_k are applied, so a caller asking for
+        project-only results gets ranked/thresholded among project skills alone
+        rather than being filtered out of a top-k/ratio computed over everyone.
         """
         qtok = set(_tokens(work_context))
         seeds = self._seed_scores(qtok)
@@ -145,6 +161,8 @@ class SkillGraph:
         results: list[ScopedSkill] = []
         for nid, node in self.nodes.items():
             if node.get("skillmap_kind") != "skill":
+                continue
+            if origin and (node.get("skillmap_origin") or "") != origin:
                 continue
             sc = scores.get(nid, 0.0)
             if sc <= 0:

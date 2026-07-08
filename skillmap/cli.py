@@ -68,9 +68,14 @@ def _roots(args) -> list[Path]:
     proj_skills = project_skills_root(proj) if proj else None
     if getattr(args, "project_only", False):
         return [proj_skills] if proj_skills else []
-    roots = list(DEFAULT_ROOTS)
-    if proj_skills and proj_skills not in roots:
+    roots: list[Path] = []
+    if proj_skills and proj_skills not in DEFAULT_ROOTS:
+        # Project root first: discover() dedups same-named skills first-wins,
+        # so a project skill must be seen before same-named global ones in
+        # order to override them (a team can't otherwise ever shadow a global
+        # skill with a project-specific variant).
         roots.append(proj_skills)
+    roots.extend(DEFAULT_ROOTS)
     return roots
 
 
@@ -95,9 +100,14 @@ def _graph_path(out: Path) -> Path | None:
 
 
 def cmd_list(args) -> int:
-    skills = discover(_roots(args))
+    roots = _roots(args)
+    if getattr(args, "project_only", False) and not roots:
+        print("No project root found (no .git upward from cwd) — nothing to scan "
+              "with --project-only. Pass --project-dir.", file=sys.stderr)
+        return 1
+    skills = discover(roots)
     if not skills:
-        print("No skills found. Checked:", ", ".join(str(r) for r in _roots(args)))
+        print("No skills found. Checked:", ", ".join(str(r) for r in roots))
         return 1
     print(f"Discovered {len(skills)} skill(s):\n")
     for s in skills:
@@ -113,6 +123,10 @@ def cmd_list(args) -> int:
 def cmd_build(args) -> int:
     out = _out(args)
     roots = _roots(args)
+    if getattr(args, "project_only", False) and not roots:
+        print("No project root found (no .git upward from cwd) — nothing to build "
+              "with --project-only. Pass --project-dir.", file=sys.stderr)
+        return 1
     print(f"→ Discovering skills under: {', '.join(str(r) for r in roots)}")
     skills = discover(roots)
     if not skills:
@@ -156,9 +170,8 @@ def cmd_scope(args) -> int:
         print(f"No graph in {out}. Run `skillmap build` (or `skillmap add-skill`) first.")
         return 1
     g = SkillGraph.load(graph_path)
-    results = g.scope(args.context, top_k=args.top_k, min_ratio=args.min_ratio)
-    if args.project_only:
-        results = [r for r in results if r.origin == "project"]
+    origin = "project" if args.project_only else None
+    results = g.scope(args.context, top_k=args.top_k, min_ratio=args.min_ratio, origin=origin)
     if args.json:
         print(json.dumps([r.__dict__ for r in results], indent=2))
         return 0

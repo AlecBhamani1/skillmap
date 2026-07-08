@@ -55,7 +55,7 @@ class Skill:
         return re.sub(r"[^a-z0-9]+", "_", self.name.lower()).strip("_")
 
 
-_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*(?:\n|\Z)", re.DOTALL)
 
 
 def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
@@ -99,9 +99,16 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
     return fields, body
 
 
-# Slash-command triggers, e.g. "Trigger: `/graphify`" or "types `/foo`".
-_TRIGGER_RE = re.compile(r"[`\s\"'(]/([a-z][a-z0-9-]{1,40})\b")
+# Slash-command triggers, e.g. "Trigger: `/graphify`" or "types `/foo`". The
+# lookahead rules out a second "/" right after the token, so file paths like
+# /usr/local/bin don't get picked up as candidate tokens.
+_TRIGGER_RE = re.compile(r"[`\s\"'(]/([a-z][a-z0-9-]{1,40})\b(?!/)")
 _HEADING_RE = re.compile(r"^#{1,4}\s+(.+?)\s*#*$", re.MULTILINE)
+
+# A line "frames" a slash-token as a trigger (rather than a path/example) if it
+# contains the word "trigger" or a "type(s)/typing /x" phrase (allowing a
+# little punctuation, e.g. backticks, between "types" and the "/").
+_TRIGGER_FRAME_RE = re.compile(r"trigger|typ(?:e|es|ing)\W{0,3}/", re.IGNORECASE)
 
 
 # Slash-tokens that look like triggers but are paths/output-dirs/flags/prose.
@@ -116,13 +123,17 @@ def _extract_triggers(name: str, body: str) -> list[str]:
     # A skill named X almost always answers to /X — that's the canonical trigger.
     slugcmd = "/" + re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-")
     found.add(slugcmd)
-    for m in _TRIGGER_RE.finditer(body):
-        tok = m.group(1)
-        if tok in _TRIGGER_BLOCKLIST or tok.endswith("-out"):
+    for line in body.splitlines():
+        # Cheap prefilter: skip lines that can't possibly be trigger-framed.
+        if not _TRIGGER_FRAME_RE.search(line):
             continue
-        # Only trust a slash-token if it's the skill's own name or appears with
-        # trigger-ish framing ("Trigger:", "types /x", "invoked ... /x").
-        if tok == slugcmd.lstrip("/"):
+        for m in _TRIGGER_RE.finditer(line):
+            tok = m.group(1)
+            if tok in _TRIGGER_BLOCKLIST or tok.endswith("-out"):
+                continue
+            # Only trust a slash-token if it's the skill's own name or appears
+            # with trigger-ish framing ("Trigger:", "types /x", "typing /x") —
+            # already guaranteed by the line-level prefilter above.
             found.add("/" + tok)
     return sorted(found)
 
@@ -158,8 +169,17 @@ def parse_skill(skill_md: Path) -> Skill | None:
 
 
 def discover(roots: list[Path] | None = None) -> list[Skill]:
-    """Find and parse every SKILL.md under the given roots (dedup by resolved path)."""
-    roots = roots or DEFAULT_ROOTS
+    """Find and parse every SKILL.md under the given roots (dedup by resolved path,
+    then by name, first-wins). Callers that mix project and global roots should
+    order `roots` with the higher-precedence (project) root first, so a
+    project-level skill overrides a same-named global one rather than being
+    silently shadowed by it (see cli._roots()).
+
+    `roots=None` means "caller didn't specify, use the global defaults"; an
+    explicit `roots=[]` means "scan nothing" (e.g. --project-only with no
+    project root found) and must not silently fall back to DEFAULT_ROOTS.
+    """
+    roots = DEFAULT_ROOTS if roots is None else roots
     seen_paths: set[Path] = set()
     seen_names: set[str] = set()
     skills: list[Skill] = []
