@@ -63,7 +63,20 @@ context. See [`DESIGN.md`](DESIGN.md) for architecture and usage.
 ```bash
 ./bin/skillmap build                    # discover → graph.json + graph.html
 ./bin/skillmap scope "<work context>"   # relevant skill neighborhood
+./bin/skillmap list                     # discovered skills, no build
+./bin/skillmap learn <name> --description "…" --body-file notes.md
+                                        # bank a project skill (alias: add-skill)
+./bin/skillmap hint [--install]         # the tiny always-on hint (→ CLAUDE.md)
+./bin/skillmap enrich-prompt            # zero-key semantic enrichment prompt
+./bin/skillmap show / query "…"         # graph summary / raw graphify BFS
 ```
+
+Scoping is redirection-aware: a description that says "Use `other-skill`
+instead for X" stops feeding the mentioning skill's score and instead routes
+those words to the *named* skill — so boilerplate disclaimers help selection
+rather than poisoning it. Concept mining is phrase-level (bigrams like
+"knowledge graph" stay whole), with repetition damping so a body full of
+copy-pasted CLI examples can't drown a once-stated concept.
 
 The loop is closed for **self-improvement at the project level**: an agent
 that learns a durable, project-specific procedure saves it with
@@ -94,11 +107,26 @@ concept↔concept bridges onto the same graph — that's what lets
 `scope "work with spreadsheets"` find a skill that only ever says "xlsx".
 Two routes produce the same payload: zero-key (`skillmap enrich-prompt` →
 have any capable agent answer it → `skillmap build --concepts-file
-answer.json`) or direct (`skillmap build --enrich`, using
-`ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` via stdlib `urllib`). Results
+answer.json`) or direct (`skillmap build --enrich`, calling the Anthropic API
+via stdlib `urllib` with `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`; default
+model `claude-sonnet-5`, override with `SKILLMAP_ENRICH_MODEL`). Results
 cache per SKILL.md content hash, survive `learn`'s incremental refresh, and
 never break the key-free deterministic build.
 
+## Measuring it
+
+`python3 diagnostics/diagnose.py` measures the built graph as an AI scoping
+layer against the live installed skills: pipeline health, identity probes
+(each skill's own vocabulary → itself first), curated and adversarial work
+contexts (including cross-mention traps), synonym-bridge probes (scored only
+when the graph is enriched), and the two numbers that make scoping worth
+doing — top-1 selection accuracy and compression (fraction of installed
+skills surfaced per query). Exit 0 = viable. Current: identity, curated,
+adversarial, and bridge top-1 all 1.0; compression 0.30. The same probes run
+CI-portably over fixture skills in `tests/` (55 tests, no graphify or
+network needed): `python -m pytest tests/`. Baselines and the improvement
+history live in [`IMPROVEMENT_PLAN.md`](IMPROVEMENT_PLAN.md).
+
 Still to build from the design above: a full dedup/consolidation sweep over
 *already-existing* skills (today's guard only catches near-duplicates at
-`learn` time).
+`learn` time), and graphing bundled skills that have no on-disk `SKILL.md`.
