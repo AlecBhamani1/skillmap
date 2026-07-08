@@ -14,10 +14,15 @@ surfacing a *neighborhood* instead of the whole set.
                             graph.html)
 ```
 
-1. **discover** (`skillmap/discover.py`) — walk `~/.claude/skills` and
-   `~/.agents/skills` (following symlinks), parse each `SKILL.md`'s frontmatter
-   (`name`, `description`), slash-command triggers, section headings, and
-   `references/` listing. Stdlib-only YAML-ish parsing; no dependency.
+1. **discover** (`skillmap/discover.py`) — walk the skill roots (following
+   symlinks), parse each `SKILL.md`'s frontmatter (`name`, `description`),
+   slash-command triggers, section headings, and `references/` listing.
+   Stdlib-only YAML-ish parsing; no dependency. Roots are the **global** ones
+   (`~/.claude/skills`, `~/.agents/skills`) plus the **project** root
+   `<project>/.claude/skills`, auto-detected via the nearest `.git` upward from
+   cwd (`--project-dir` overrides detection, `--project-only` drops the global
+   roots, `--root` overrides everything). Skill nodes carry a
+   `skillmap_origin` of `project` or `global`.
 
 2. **extract** (`skillmap/extract.py`) — turn skills into a graphify-compatible
    extraction JSON with two node tiers:
@@ -52,21 +57,80 @@ surfacing a *neighborhood* instead of the whole set.
    Mirrors graphify's own query traversal (label-match seeds → BFS neighborhood)
    but post-filters to skill nodes and returns a ranked list — the scoping
    primitive the README calls for. `skillmap query` also exposes graphify's raw
-   BFS for comparison.
+   BFS for comparison. Results include the `SKILL.md` path (so the caller can
+   load the body) and the project/global origin. When no `graph.json` has been
+   built yet, scope falls back to the raw extraction
+   (`.skillmap_extract.json`), so the whole recall path also works with **no
+   graphify installed**.
+
+## Project-level skills: the self-improvement loop
+
+`skillmap add-skill` (`skillmap/author.py`) is the agent-facing **write path**.
+An agent that just learned a durable, project-specific procedure runs:
+
+```bash
+skillmap add-skill fix-flaky-ci \
+  --description "Diagnose and fix flaky CI failures in this repo's integration pipeline." \
+  --body-file notes.md --reference deep-detail.md
+```
+
+which
+
+1. writes a lean, well-formed `SKILL.md` under
+   `<project>/.claude/skills/<name>/` — validated frontmatter (kebab-case
+   name; a description long enough to key the graph on), body capped at 450
+   lines with supporting files pushed into `references/`; and
+2. **refreshes the graph incrementally**: re-runs the deterministic extraction
+   over all roots (milliseconds — it's just markdown parsing) and merges it
+   into the existing `graph.json` *in place*, without invoking graphify.
+   graphify-computed node attributes (community labels) are preserved; new
+   nodes inherit the majority community of their neighbors; skills deleted
+   from disk drop out of the graph (a small consolidation pass for free).
+   A later `skillmap build` re-clusters properly and regenerates the HTML.
+
+Future sessions then recall it with `skillmap scope "<work context>"`. If the
+skill already exists, `add-skill` exits **3** with route → merge → refactor
+guidance instead of blind-appending; `--force` writes the merged version.
+
+`skillmap hint --install` appends a tiny marker-guarded block to the project's
+`CLAUDE.md` — the always-on hint (README point 3) that tells an agent to query
+the graph before working and to save what it learns. Idempotent.
 
 ## Usage
 
 ```bash
 ./bin/skillmap build                       # discover → extract → build graph.json + graph.html
-./bin/skillmap list                        # list discovered skills
+./bin/skillmap list                        # list discovered skills (global + project)
+./bin/skillmap add-skill <name> --description "…" [--body-file F] [--reference F]
+                                           # author a project skill + refresh graph
 ./bin/skillmap scope "<work context>"      # relevant skill neighborhood for a context
-./bin/skillmap scope "<ctx>" --json        # machine-readable
+./bin/skillmap scope "<ctx>" --json        # machine-readable (name, score, path, origin)
 ./bin/skillmap scope "<ctx>" --min-ratio 0 # keep the full ranked gradient
+./bin/skillmap hint [--install]            # print/install the always-on router hint
 ./bin/skillmap query "<question>"          # graphify's own BFS traversal
 ./bin/skillmap show                        # summarize the built graph
 ```
 
-Output lands in `skillmap-out/` (`graph.json`, `graph.html`).
+**Every command** accepts `--project-dir DIR`, `--project-only`, and
+`--root DIR` (no documented flag ever errors). Their effect per command:
+
+- `--project-dir DIR` — explicit project root (instead of auto-detecting via
+  the nearest `.git`). Also anchors the default `--out` at
+  `DIR/skillmap-out`, so `scope`/`show`/`query` read the graph built *for that
+  project* without needing `--out`.
+- `--project-only` — on discovery commands (`build`, `list`, `add-skill`'s
+  refresh): scan only the project's `.claude/skills`, not the global roots.
+  On `scope`: surface only project-level skills in the results. On `show`:
+  list only project-level skills. On `query`/`hint`: accepted for
+  consistency; graphify's raw traversal doesn't filter by origin (use `scope`).
+- `--root DIR` — override all discovery roots (repeatable); only meaningful
+  where skills are discovered.
+
+Exit codes: `0` success · `1` invalid input / nothing found · `2` graphify
+missing · `3` skill already exists (merge, then `--force`).
+
+Output lands in `skillmap-out/` (`graph.json`, `graph.html`,
+`.skillmap_extract.json`).
 
 ## What this POC demonstrates
 
@@ -85,7 +149,8 @@ Output lands in `skillmap-out/` (`graph.json`, `graph.html`).
 - **Bundled skills** (deep-research, dataviz, code-review, …) have no on-disk
   `SKILL.md`, so they aren't graphed. Feeding their name+description (from the
   system prompt) as synthetic nodes would complete the map.
-- **No always-on hint yet.** README point 3 ("keep a tiny always-on hint that
-  the graph exists") would be a small router skill that calls `skillmap scope`
-  at selection time. Not built in this POC.
-- **No dedup/consolidation pass** (README point 4). Rebuild is full each time.
+- **Dedup/consolidation is partial** (README point 4). The incremental refresh
+  drops deleted skills and refuses blind appends on existing names, but there
+  is no pass yet that detects *near-duplicate* skills and proposes merges.
+- **Incremental refresh doesn't re-cluster.** New nodes inherit a neighbor's
+  community; run `skillmap build` periodically for a real re-clustering.

@@ -57,6 +57,8 @@ class ScopedSkill:
     matched_concepts: list[str]
     description: str
     triggers: list[str]
+    path: str = ""  # SKILL.md location, so a caller can load the body
+    origin: str = ""  # "project" or "global"
 
 
 class SkillGraph:
@@ -167,6 +169,8 @@ class SkillGraph:
                 matched_concepts=sorted(set(matched)),
                 description=node.get("skillmap_description", ""),
                 triggers=node.get("skillmap_triggers", []) or [],
+                path=node.get("source_file", "") or "",
+                origin=node.get("skillmap_origin", "") or "",
             ))
         results.sort(key=lambda r: -r.score)
         if results and min_ratio > 0:
