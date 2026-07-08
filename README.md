@@ -53,16 +53,31 @@ are what determine whether the system holds up as it grows.
 
 ## Status
 
-Working proof-of-concept. A `skillmap` CLI discovers installed skills, extracts
-a skill/concept graph, hands it to **graphify** for graph building + clustering,
-and scopes the relevant skill neighborhood for a given work context. See
-[`DESIGN.md`](DESIGN.md) for architecture and usage.
+Working proof-of-concept. A `skillmap` CLI discovers installed skills —
+**global** (`~/.claude/skills`, `~/.agents/skills`) and **project-level**
+(`<project>/.claude/skills`, auto-detected via the nearest `.git`) — extracts
+a skill/concept graph, hands it to **graphify** for graph building +
+clustering, and scopes the relevant skill neighborhood for a given work
+context. See [`DESIGN.md`](DESIGN.md) for architecture and usage.
 
 ```bash
 ./bin/skillmap build                    # discover → graph.json + graph.html
 ./bin/skillmap scope "<work context>"   # relevant skill neighborhood
 ```
 
-Still to build from the design above: the always-on hint / router layer (point
-3), the dedup/consolidation pass (point 4), and LLM-based concept extraction
-(the current pass mines concepts by weighted frequency, not semantics).
+The loop is closed for **self-improvement at the project level**: an agent
+that learns a durable, project-specific procedure saves it with
+
+```bash
+./bin/skillmap add-skill <name> --description "<when to use it>" --body-file notes.md
+```
+
+which writes a lean `SKILL.md` into the project and updates the graph
+**incrementally** (no graphify call, no full rebuild), so the next
+`skillmap scope` in a future session recalls it. `skillmap hint --install`
+plants the tiny always-on hint (point 3 above) in the project's `CLAUDE.md`.
+
+Still to build from the design above: the full dedup/consolidation pass (point
+4 — refresh already drops deleted skills and blocks blind appends, but doesn't
+detect near-duplicates), and LLM-based concept extraction (the current pass
+mines concepts by weighted frequency, not semantics).

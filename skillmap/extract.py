@@ -22,7 +22,18 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 
-from .discover import Skill
+from .discover import DEFAULT_ROOTS, Skill
+
+
+def _origin(skill: Skill) -> str:
+    """"global" if the skill lives under a global root, else "project"."""
+    for root in DEFAULT_ROOTS:
+        try:
+            if skill.path.is_relative_to(root.resolve()):
+                return "global"
+        except OSError:
+            continue
+    return "project"
 
 # Words that are never useful concept anchors.
 _STOPWORDS = set(
@@ -78,6 +89,7 @@ def _skill_node(skill: Skill) -> dict:
         "skillmap_description": skill.description,
         "skillmap_triggers": skill.triggers,
         "skillmap_references": skill.references,
+        "skillmap_origin": _origin(skill),
     }
 
 
